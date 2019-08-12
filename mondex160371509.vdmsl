@@ -1,0 +1,145 @@
+-- CSC2021 Coursework 2 2018
+-- Name: William Gilgunn
+-- StdNo: 160371509
+
+-- Electronic purse model based on Mondex specification
+-- See coursework specification in Blackboard for more detail.
+
+
+types
+PurseId = token;
+PurseKey = token;
+
+Purse :: balance : nat
+	     key : PurseKey;
+
+PursesMap = map PurseId to Purse;
+
+WalletId = token;
+KeyAuth = token;
+
+Wallet :: id: WalletId
+          fromSlot : [PurseId]
+          toSlot : [PurseId]
+          auth : KeyAuth;
+
+values
+wa1: Wallet = mk_Wallet(mk_token("wa1"),nil,nil,mk_token("auth1"));
+wa2: Wallet = mk_Wallet(mk_token("wa2"),nil,nil,mk_token("auth2"));
+wa3: Wallet = mk_Wallet(mk_token("wa3"),nil,nil,mk_token("auth3"));
+
+pk1: PurseKey = mk_token("pk1");
+pk2: PurseKey = mk_token("pk2");
+pk3: PurseKey = mk_token("pk3");
+pk4: PurseKey = mk_token("pk4");
+pk5: PurseKey = mk_token("pk5");
+
+Purse1: PurseId = mk_token("p1");
+Purse2: PurseId = mk_token("p2");	
+Purse3: PurseId = mk_token("p3");	
+
+state World of
+         totalCash : nat 
+         bank : set of Purse
+         issuedPurses: PursesMap
+         wallets: set of Wallet
+inv mk_World(totalCash,bank,issuedPurses,wallets) == 
+				 UniqueWalletData(wallets) and 				
+				 UniquePurseKeys(bank union rng issuedPurses) and 
+         NoPurseInTwoPlaces(bank, issuedPurses) and
+         AllValueAccountedFor(bank,issuedPurses,totalCash)
+init w == w = mk_World(500,
+				{mk_Purse(100,mk_token(pk)) | pk in set {pk1,pk2,pk3,pk4,pk5}},
+								{|->},
+						{wa1,wa2,wa3})
+end 
+
+functions
+-- Wallet's KeyAuth authenticates Purse's PurseKey. Modelled as a function 
+-- that always returns true.
+Authenticate: KeyAuth * PurseKey -> bool
+Authenticate(-, -) == true; 
+
+-- Function to ensure that identifier (id: WalletId) and  (auth: KeyAuth are different for all wallets.
+-- Returns true if all wallets in the set have different ids, and all have different auths.
+-- QUESTION 1
+UniqueWalletData: set of Wallet -> bool
+UniqueWalletData(wallets) == forall x,y in set wallets & x <> y => (x.id <> y.id and x.auth <> y.auth);
+
+-- Function to check that all elements of purseSet have a different key.
+-- Returns true if all purses in the set have different keys.
+-- QUESTION 2
+UniquePurseKeys: set of Purse -> bool
+UniquePurseKeys(purseSet) == forall x,y in set purseSet & x <> y => x.key <> y.key;
+
+-- Function to ensure that a purse is either in one of two places: either unissued (in the bank) or issued (in the issuedPurses mapping)
+-- Returns true if there is no overlap between purses
+-- QUESTION 3 
+NoPurseInTwoPlaces: set of Purse * PursesMap -> bool
+NoPurseInTwoPlaces(bank,issuedPurses) == 
+bank inter rng issuedPurses = {};
+   
+AllValueAccountedFor: set of Purse * PursesMap * nat-> bool
+AllValueAccountedFor(bank, issuedPurses, totalCash) ==
+ SumBalances(bank union rng issuedPurses) = totalCash;
+ 
+-- Recursively calculate total balance over a set of purses
+-- QUESTION 4
+SumBalances: set of Purse -> nat
+SumBalances(purses) == if purses = {} then 0 else let x in set purses in x.balance + SumBalances (purses \ {x});
+
+
+operations
+-- Allocate a PurseId to an arbitrary purse from the bank
+-- A newly allocated purse must be given a PurseId which does not already exist in the issuedPurses mapping
+-- QUESTION 5
+IssuePurse: PurseId ==> ()
+IssuePurse (pId) ==
+	let p in set bank in atomic (      
+      bank := bank \ {p};
+      issuedPurses := issuedPurses munion {pId |-> p})
+pre pId not in set dom issuedPurses and UniquePurseKeys(rng issuedPurses) and AllValueAccountedFor(bank,issuedPurses,totalCash) and NoPurseInTwoPlaces(bank,issuedPurses) and UniqueWalletData(wallets);
+    
+operations
+-- Initiate a transfer between 2 purses, by inserting into a wallet
+
+-- 1. All value is accounted for – the total sum of money in the system does not change
+-- 2. Authentic purses – only authorised purses can participate in transactions
+-- 3. Sufficient funds – purses can only transfer up to the current balance
+
+-- QUESTION 6
+SetupTransfer: Wallet * PurseId * PurseId * nat ==> ()
+SetupTransfer(wallet, fromId, toId, sum)==
+         issuedPurses := Transfer(issuedPurses,
+                           mk_Wallet(wallet.id,fromId,toId,wallet.auth),
+                           sum)
+pre wallet in set wallets and fromId in set dom issuedPurses and toId in set dom issuedPurses and issuedPurses(fromId).balance >= sum and Authenticate(wallet.auth,issuedPurses(toId).key) and Authenticate(wallet.auth,issuedPurses(fromId).key);
+
+
+functions
+-- Auxiliary function to decrease the balance of a purse by a certain amount 
+DecreaseBal: PursesMap * PurseId * nat -> Purse
+DecreaseBal(pmap,pIdFrom,sumDeducted) ==
+mk_Purse(pmap(pIdFrom).balance - sumDeducted,pmap(pIdFrom).key);
+
+-- Auxiliary function to increase the balance of a purse by a certain amount 
+IncreaseBal: PursesMap * PurseId * nat -> Purse
+IncreaseBal(pmap,pIdTo,sumAdded) ==
+mk_Purse(pmap(pIdTo).balance + sumAdded,pmap(pIdTo).key);
+
+-- Main function to make the transfer of money from one purse to another
+Transfer: PursesMap * Wallet * nat -> PursesMap
+Transfer(pmap, wallet, sum) == 
+pmap ++ {wallet.toSlot |-> IncreaseBal(pmap,wallet.toSlot,sum)} ++ {wallet.fromSlot |-> DecreaseBal(pmap,wallet.fromSlot,sum)}
+pre {wallet.fromSlot, wallet.toSlot} subset dom pmap and wallet.fromSlot <> wallet.toSlot;
+	
+operations
+Run: () ==> ()
+Run() ==
+ 	(
+   IssuePurse(Purse1);
+   IssuePurse(Purse2);
+   SetupTransfer(wa1,Purse1,Purse2,10);
+   IssuePurse(Purse3);
+   )
+   
